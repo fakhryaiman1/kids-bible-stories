@@ -17,6 +17,11 @@ export const StoryEditorPage: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+
+  // Upload state tracking
+  const [uploadingField, setUploadingField] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
   
   // Tabs State
   type TabType = 'info' | 'pages' | 'images' | 'quiz' | 'lessons' | 'audio' | 'settings' | 'preview';
@@ -67,6 +72,7 @@ export const StoryEditorPage: React.FC = () => {
           setSlug(storyData.slug || '');
           setDescription(storyData.description || '');
           setCoverImage(storyData.cover_image || '');
+          setBannerImage(storyData.banner_image || storyData.cover_image || '');
           setCategoryId(storyData.category_id || '');
           setAgeGroup(storyData.age_group || 'kindergarten');
           setTestament(storyData.testament || 'old');
@@ -159,11 +165,10 @@ export const StoryEditorPage: React.FC = () => {
       let storyId = id;
       const isPublishAction = isDraft === false;
       
-      const payload = {
+      const payload: Record<string, any> = {
         title,
         slug: slug || title.trim().toLowerCase().replace(/\s+/g, '-'),
         description,
-        cover_image: coverImage || 'https://images.unsplash.com/photo-1519681393784-d120267933ba?auto=format&fit=crop&w=900&q=80',
         category_id: categoryId || categories[0]?.id,
         age_group: ageGroup,
         testament,
@@ -173,6 +178,9 @@ export const StoryEditorPage: React.FC = () => {
         published: isPublishAction ? published : false,
         updated_at: new Date().toISOString(),
       };
+      // Only include image fields if they have a real value (don't overwrite with empty string)
+      if (coverImage) payload.cover_image = coverImage;
+      if (bannerImage) payload.banner_image = bannerImage;
 
       if (!storyId || storyId === 'new') {
         const { data: newStory, error } = await supabase.from('stories').insert(payload).select().single();
@@ -193,14 +201,15 @@ export const StoryEditorPage: React.FC = () => {
 
         for (let i = 0; i < pages.length; i++) {
           const page = pages[i];
-          const pagePayload = {
+          const pagePayload: Record<string, any> = {
             story_id: storyId,
             page_number: i + 1,
             title: page.title || `صفحة ${i + 1}`,
             content: page.content || '',
-            image: page.image || coverImage || 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=900&q=80',
             audio: page.audio || null,
           };
+          // Only set image if it has a real URL — do NOT overwrite with a placeholder
+          if (page.image) pagePayload.image = page.image;
 
           if (page.id) {
             await supabase.from('story_pages').update(pagePayload).eq('id', page.id);
@@ -367,15 +376,68 @@ export const StoryEditorPage: React.FC = () => {
     markChanged();
   };
 
-  // Asset Upload Handler
-  const handleUploadAsset = async (file: File, target: 'cover' | 'banner' | 'page_image' | 'page_audio') => {
-    const url = await uploadAsset(file, 'story-assets');
-    if (url) {
-      if (target === 'cover') setCoverImage(url);
-      if (target === 'banner') setBannerImage(url);
-      if (target === 'page_image') updateActivePage('image', url);
-      if (target === 'page_audio') updateActivePage('audio', url);
-      markChanged();
+  // Asset Upload Handler — uploads to Supabase Storage, saves URL to DB immediately
+  const handleUploadAsset = async (
+    file: File,
+    target: 'cover' | 'banner' | 'page_image' | 'page_audio',
+    pageIndex?: number,
+  ) => {
+    setUploadingField(target);
+    setUploadError(null);
+    setUploadSuccess(null);
+
+    try {
+      const url = await uploadAsset(file, 'story-assets');
+      if (!url) throw new Error('فشل رفع الملف إلى Supabase Storage');
+
+      // Add cache-busting timestamp to force browser reload
+      const cacheBustedUrl = `${url}?t=${Date.now()}`;
+
+      // Update local React state immediately
+      if (target === 'cover') setCoverImage(cacheBustedUrl);
+      if (target === 'banner') setBannerImage(cacheBustedUrl);
+      if (target === 'page_image') {
+        const idx = pageIndex ?? selectedPageIndex;
+        const updated = [...pages];
+        updated[idx] = { ...updated[idx], image: cacheBustedUrl };
+        setPages(updated);
+
+        // Immediately persist page image to DB if page already has an ID
+        const pageId = updated[idx]?.id;
+        if (pageId && id && id !== 'new') {
+          await supabase.from('story_pages').update({ image: cacheBustedUrl }).eq('id', pageId);
+        }
+      }
+      if (target === 'page_audio') {
+        const idx = pageIndex ?? selectedPageIndex;
+        const updated = [...pages];
+        updated[idx] = { ...updated[idx], audio: cacheBustedUrl };
+        setPages(updated);
+        const pageId = updated[idx]?.id;
+        if (pageId && id && id !== 'new') {
+          await supabase.from('story_pages').update({ audio: cacheBustedUrl }).eq('id', pageId);
+        }
+      }
+
+      // Immediately persist cover/banner to DB
+      if ((target === 'cover' || target === 'banner') && id && id !== 'new') {
+        const field = target === 'cover' ? 'cover_image' : 'banner_image';
+        await supabase.from('stories').update({ [field]: cacheBustedUrl }).eq('id', id);
+      }
+
+      setUploadSuccess(`تم رفع ${target === 'cover' ? 'صورة الغلاف' : target === 'banner' ? 'البانر' : target === 'page_image' ? 'صورة الصفحة' : 'الصوت'} بنجاح ✅`);
+      setHasUnsavedChanges(true);
+      setLastSaved(new Date().toLocaleTimeString('ar-EG'));
+    } catch (err: any) {
+      console.error('Upload error:', err);
+      setUploadError(err.message || 'حدث خطأ أثناء الرفع، يرجى المحاولة مرة أخرى');
+    } finally {
+      setUploadingField(null);
+      // Auto-clear success/error messages after 4 seconds
+      setTimeout(() => {
+        setUploadSuccess(null);
+        setUploadError(null);
+      }, 4000);
     }
   };
 
@@ -389,6 +451,21 @@ export const StoryEditorPage: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* Upload Status Toast Notifications */}
+      {(uploadSuccess || uploadError || uploadingField) && (
+        <div className={`fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-2xl px-6 py-3 text-sm font-bold shadow-2xl transition-all ${
+          uploadError ? 'bg-rose-600 text-white' : uploadSuccess ? 'bg-emerald-600 text-white' : 'bg-indigo-600 text-white'
+        }`}>
+          {uploadingField && !uploadError && !uploadSuccess && (
+            <span className="flex items-center gap-2">
+              <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+              جاري رفع الملف...
+            </span>
+          )}
+          {uploadSuccess && uploadSuccess}
+          {uploadError && `❌ ${uploadError}`}
+        </div>
+      )}
       {/* CMS Top Control Action Bar */}
       <div className="sticky top-4 z-40 flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-slate-800 bg-slate-900/90 p-4 backdrop-blur-xl shadow-2xl">
         <div className="flex items-center gap-3">
@@ -731,22 +808,35 @@ export const StoryEditorPage: React.FC = () => {
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2 rounded-2xl border border-slate-800 bg-slate-950 p-4">
                   <label className="block text-xs font-bold text-slate-300">صورة الصفحة</label>
-                  {activePage.image && (
-                    <img src={activePage.image} alt="صورة" className="h-32 w-full rounded-xl object-cover" />
+                  {activePage.image ? (
+                    <img
+                      key={activePage.image}
+                      src={activePage.image}
+                      alt="صورة الصفحة"
+                      className="h-32 w-full rounded-xl object-cover"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                    />
+                  ) : (
+                    <div className="flex h-32 w-full items-center justify-center rounded-xl bg-slate-900 text-slate-600">
+                      <ImageIcon size={32} />
+                    </div>
                   )}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => {
-                      if (e.target.files?.[0]) handleUploadAsset(e.target.files[0], 'page_image');
-                    }}
-                    className="w-full text-xs text-slate-400"
-                  />
+                  <label className={`flex cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-dashed p-2.5 text-xs font-bold transition-all ${
+                    uploadingField === 'page_image' ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 text-slate-400 hover:border-purple-500 hover:text-purple-400'
+                  }`}>
+                    {uploadingField === 'page_image' ? (
+                      <><span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-indigo-400 border-t-transparent" /> جاري الرفع...</>
+                    ) : (
+                      <><ImageIcon size={12} /> ارفع صورة الصفحة</>
+                    )}
+                    <input type="file" accept="image/*" className="hidden" disabled={!!uploadingField}
+                      onChange={(e) => { if (e.target.files?.[0]) handleUploadAsset(e.target.files[0], 'page_image', selectedPageIndex); }} />
+                  </label>
                   <input
                     type="url"
-                    value={activePage.image || ''}
+                    value={(activePage.image || '').split('?t=')[0]}
                     onChange={(e) => updateActivePage('image', e.target.value)}
-                    placeholder="رابط الصورة..."
+                    placeholder="أو أدخل رابط الصورة مباشرة..."
                     className="w-full rounded-xl border border-slate-800 bg-slate-900 p-2 text-xs text-white outline-none"
                   />
                 </div>
@@ -775,24 +865,36 @@ export const StoryEditorPage: React.FC = () => {
           <div className="space-y-4 rounded-3xl border border-slate-800 bg-slate-900 p-6 shadow-xl">
             <h2 className="text-base font-black text-white">صورة الغلاف (Cover Image)</h2>
             <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-950">
-              <img src={coverImage || 'https://images.unsplash.com/photo-1519681393784-d120267933ba?w=800'} alt="غلاف" className="h-56 w-full object-cover" />
+              {coverImage ? (
+                <img
+                  key={coverImage}
+                  src={coverImage}
+                  alt="غلاف"
+                  className="h-56 w-full object-cover"
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                />
+              ) : (
+                <div className="flex h-56 w-full items-center justify-center text-slate-600">
+                  <ImageIcon size={48} />
+                </div>
+              )}
             </div>
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => {
-                if (e.target.files?.[0]) handleUploadAsset(e.target.files[0], 'cover');
-              }}
-              className="w-full text-xs text-slate-400"
-            />
+            <label className={`flex cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-dashed p-3 text-xs font-bold transition-all ${
+              uploadingField === 'cover' ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 text-slate-400 hover:border-purple-500 hover:text-purple-400'
+            }`}>
+              {uploadingField === 'cover' ? (
+                <><span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-indigo-400 border-t-transparent" /> جاري الرفع...</>
+              ) : (
+                <><ImageIcon size={14} /> اختر صورة الغلاف أو اسحبها هنا</>
+              )}
+              <input type="file" accept="image/*" className="hidden" disabled={!!uploadingField}
+                onChange={(e) => { if (e.target.files?.[0]) handleUploadAsset(e.target.files[0], 'cover'); }} />
+            </label>
             <input
               type="url"
-              value={coverImage}
-              onChange={(e) => {
-                setCoverImage(e.target.value);
-                markChanged();
-              }}
-              placeholder="رابط الصورة مباشرة..."
+              value={coverImage.split('?t=')[0]}
+              onChange={(e) => { setCoverImage(e.target.value); markChanged(); }}
+              placeholder="أو أدخل رابط الصورة مباشرة..."
               className="w-full rounded-xl border border-slate-800 bg-slate-950 p-2.5 text-xs text-white outline-none"
             />
           </div>
@@ -800,24 +902,36 @@ export const StoryEditorPage: React.FC = () => {
           <div className="space-y-4 rounded-3xl border border-slate-800 bg-slate-900 p-6 shadow-xl">
             <h2 className="text-base font-black text-white">صورة البانر العلوي (Banner Image)</h2>
             <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-950">
-              <img src={bannerImage || coverImage || 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=800'} alt="بانر" className="h-56 w-full object-cover" />
+              {(bannerImage || coverImage) ? (
+                <img
+                  key={bannerImage || coverImage}
+                  src={bannerImage || coverImage}
+                  alt="بانر"
+                  className="h-56 w-full object-cover"
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                />
+              ) : (
+                <div className="flex h-56 w-full items-center justify-center text-slate-600">
+                  <ImageIcon size={48} />
+                </div>
+              )}
             </div>
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => {
-                if (e.target.files?.[0]) handleUploadAsset(e.target.files[0], 'banner');
-              }}
-              className="w-full text-xs text-slate-400"
-            />
+            <label className={`flex cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-dashed p-3 text-xs font-bold transition-all ${
+              uploadingField === 'banner' ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300' : 'border-slate-700 text-slate-400 hover:border-purple-500 hover:text-purple-400'
+            }`}>
+              {uploadingField === 'banner' ? (
+                <><span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-indigo-400 border-t-transparent" /> جاري الرفع...</>
+              ) : (
+                <><ImageIcon size={14} /> اختر صورة البانر أو اسحبها هنا</>
+              )}
+              <input type="file" accept="image/*" className="hidden" disabled={!!uploadingField}
+                onChange={(e) => { if (e.target.files?.[0]) handleUploadAsset(e.target.files[0], 'banner'); }} />
+            </label>
             <input
               type="url"
-              value={bannerImage}
-              onChange={(e) => {
-                setBannerImage(e.target.value);
-                markChanged();
-              }}
-              placeholder="رابط البانر..."
+              value={(bannerImage || '').split('?t=')[0]}
+              onChange={(e) => { setBannerImage(e.target.value); markChanged(); }}
+              placeholder="أو أدخل رابط البانر مباشرة..."
               className="w-full rounded-xl border border-slate-800 bg-slate-950 p-2.5 text-xs text-white outline-none"
             />
           </div>
