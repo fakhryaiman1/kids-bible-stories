@@ -820,7 +820,24 @@ export const StoryEditorPage: React.FC = () => {
 
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2 rounded-2xl border border-slate-800 bg-slate-950 p-4">
-                  <label className="block text-xs font-bold text-slate-300">صورة الصفحة</label>
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-bold text-slate-300">صورة الصفحة</label>
+                    {activePage.image && (
+                      <button
+                        onClick={async () => {
+                          updateActivePage('image', null);
+                          markChanged();
+                          if (activePage.id) {
+                            await supabase.from('story_pages').update({ image: null }).eq('id', activePage.id);
+                          }
+                        }}
+                        className="flex items-center gap-1 rounded-lg bg-rose-500/20 px-2 py-1 text-xs font-bold text-rose-400 hover:bg-rose-500 hover:text-white transition-all"
+                        title="حذف الصورة"
+                      >
+                        <X size={12} /> حذف الصورة
+                      </button>
+                    )}
+                  </div>
                   {activePage.image ? (
                     <img
                       key={activePage.image}
