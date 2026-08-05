@@ -209,22 +209,40 @@ export const StoryEditorPage: React.FC = () => {
             story_id: storyId,
             page_number: i + 1,
             title: page.title || `صفحة ${i + 1}`,
-            content: page.content ?? '',
+            content: page.content !== undefined ? page.content : '',
             image: page.image || null,
             audio: page.audio || null,
           };
 
-          const { data: upsertedPage, error: upsertErr } = await supabase
-            .from('story_pages')
-            .upsert(pagePayload, { onConflict: 'story_id, page_number' })
-            .select()
-            .single();
+          if (page.id) {
+            // Page already exists in DB — update it directly by ID
+            const { data: updatedPage, error: updateErr } = await supabase
+              .from('story_pages')
+              .update(pagePayload)
+              .eq('id', page.id)
+              .select()
+              .single();
 
-          if (upsertErr) {
-            console.error(`Error upserting page ${i + 1}:`, upsertErr);
-            updatedPagesList.push(page);
+            if (updateErr) {
+              console.error(`Error updating page ${i + 1}:`, updateErr);
+              updatedPagesList.push(page);
+            } else {
+              updatedPagesList.push(updatedPage || page);
+            }
           } else {
-            updatedPagesList.push(upsertedPage || page);
+            // New page — insert into DB
+            const { data: insertedPage, error: insertErr } = await supabase
+              .from('story_pages')
+              .insert(pagePayload)
+              .select()
+              .single();
+
+            if (insertErr) {
+              console.error(`Error inserting page ${i + 1}:`, insertErr);
+              updatedPagesList.push(page);
+            } else {
+              updatedPagesList.push(insertedPage || page);
+            }
           }
         }
         setPages(updatedPagesList);
@@ -411,22 +429,35 @@ export const StoryEditorPage: React.FC = () => {
         updated[idx] = { ...updated[idx], [fieldName]: cacheBustedUrl };
 
         if (id && id !== 'new') {
+          const pageId = updated[idx]?.id;
           const pagePayload = {
             story_id: id,
             page_number: idx + 1,
             title: updated[idx].title || `صفحة ${idx + 1}`,
-            content: updated[idx].content ?? '',
+            content: updated[idx].content !== undefined ? updated[idx].content : '',
             image: updated[idx].image || null,
             audio: updated[idx].audio || null,
           };
-          const { data: upsertedPage, error: upsertErr } = await supabase
-            .from('story_pages')
-            .upsert(pagePayload, { onConflict: 'story_id, page_number' })
-            .select()
-            .single();
-          if (upsertErr) console.error(`Error upserting page ${target}:`, upsertErr);
-          if (upsertedPage) {
-            updated[idx] = upsertedPage;
+
+          if (pageId) {
+            // Page exists — update by ID
+            const { data: updatedPage, error: updateErr } = await supabase
+              .from('story_pages')
+              .update(pagePayload)
+              .eq('id', pageId)
+              .select()
+              .single();
+            if (updateErr) console.error(`Error updating page ${target}:`, updateErr);
+            if (updatedPage) updated[idx] = updatedPage;
+          } else {
+            // New page — insert
+            const { data: insertedPage, error: insertErr } = await supabase
+              .from('story_pages')
+              .insert(pagePayload)
+              .select()
+              .single();
+            if (insertErr) console.error(`Error inserting page ${target}:`, insertErr);
+            if (insertedPage) updated[idx] = insertedPage;
           }
         }
         setPages(updated);
