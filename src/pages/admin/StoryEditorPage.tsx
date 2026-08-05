@@ -194,11 +194,17 @@ export const StoryEditorPage: React.FC = () => {
 
       // Save Pages
       if (storyId) {
-        const existingPageIds = pages.map((p) => p.id).filter(Boolean);
+        const existingPageIds = pages.map((p) => p.id).filter(Boolean) as string[];
         if (existingPageIds.length > 0) {
-          await supabase.from('story_pages').delete().eq('story_id', storyId).not('id', 'in', `(${existingPageIds.join(',')})`);
+          const { error: delErr } = await supabase
+            .from('story_pages')
+            .delete()
+            .eq('story_id', storyId)
+            .not('id', 'in', existingPageIds);
+          if (delErr) console.error('Error deleting removed pages:', delErr);
         }
 
+        const updatedPagesList: Partial<StoryPage>[] = [];
         for (let i = 0; i < pages.length; i++) {
           const page = pages[i];
           const pagePayload: Record<string, any> = {
@@ -206,24 +212,40 @@ export const StoryEditorPage: React.FC = () => {
             page_number: i + 1,
             title: page.title || `صفحة ${i + 1}`,
             content: page.content || '',
+            image: page.image || null,
             audio: page.audio || null,
           };
-          // Only set image if it has a real URL — do NOT overwrite with a placeholder
-          if (page.image) pagePayload.image = page.image;
 
           if (page.id) {
-            await supabase.from('story_pages').update(pagePayload).eq('id', page.id);
+            const { data: updatedPage, error: updateErr } = await supabase
+              .from('story_pages')
+              .update(pagePayload)
+              .eq('id', page.id)
+              .select()
+              .single();
+
+            if (updateErr) {
+              console.error(`Error updating page ${i + 1}:`, updateErr);
+              updatedPagesList.push(page);
+            } else {
+              updatedPagesList.push(updatedPage || page);
+            }
           } else {
-            const { data: insertedPage } = await supabase.from('story_pages').insert(pagePayload).select().single();
-            if (insertedPage) {
-              setPages((prev) => {
-                const updated = [...prev];
-                updated[i] = insertedPage;
-                return updated;
-              });
+            const { data: insertedPage, error: insertErr } = await supabase
+              .from('story_pages')
+              .insert(pagePayload)
+              .select()
+              .single();
+
+            if (insertErr) {
+              console.error(`Error inserting page ${i + 1}:`, insertErr);
+              updatedPagesList.push(page);
+            } else {
+              updatedPagesList.push(insertedPage || page);
             }
           }
         }
+        setPages(updatedPagesList);
 
         // Save Quizzes
         for (let qIdx = 0; qIdx < quizzes.length; qIdx++) {
@@ -260,9 +282,13 @@ export const StoryEditorPage: React.FC = () => {
       }
 
       setHasUnsavedChanges(false);
-      setLastSaved(new Date().toLocaleTimeString('ar-EG'));
+      const saveTime = new Date().toLocaleTimeString('ar-EG');
+      setLastSaved(saveTime);
+      setUploadSuccess('تم حفظ ونشر القصة وجميع الصفحات بنجاح ✅');
+      setTimeout(() => setUploadSuccess(null), 4000);
     } catch (err: any) {
       console.error('Error saving story:', err);
+      setUploadError(err.message || 'حدث خطأ أثناء حفظ القصة');
     } finally {
       setSaving(false);
     }
@@ -400,22 +426,54 @@ export const StoryEditorPage: React.FC = () => {
         const idx = pageIndex ?? selectedPageIndex;
         const updated = [...pages];
         updated[idx] = { ...updated[idx], image: cacheBustedUrl };
-        setPages(updated);
 
-        // Immediately persist page image to DB if page already has an ID
         const pageId = updated[idx]?.id;
         if (pageId && id && id !== 'new') {
           await supabase.from('story_pages').update({ image: cacheBustedUrl }).eq('id', pageId);
+          setPages(updated);
+        } else if (id && id !== 'new') {
+          const pagePayload = {
+            story_id: id,
+            page_number: idx + 1,
+            title: updated[idx].title || `صفحة ${idx + 1}`,
+            content: updated[idx].content || '',
+            image: cacheBustedUrl,
+          };
+          const { data: newPage, error: insertErr } = await supabase.from('story_pages').insert(pagePayload).select().single();
+          if (insertErr) console.error('Error auto-inserting page on image upload:', insertErr);
+          if (newPage) {
+            updated[idx] = newPage;
+          }
+          setPages(updated);
+        } else {
+          setPages(updated);
         }
       }
       if (target === 'page_audio') {
         const idx = pageIndex ?? selectedPageIndex;
         const updated = [...pages];
         updated[idx] = { ...updated[idx], audio: cacheBustedUrl };
-        setPages(updated);
+
         const pageId = updated[idx]?.id;
         if (pageId && id && id !== 'new') {
           await supabase.from('story_pages').update({ audio: cacheBustedUrl }).eq('id', pageId);
+          setPages(updated);
+        } else if (id && id !== 'new') {
+          const pagePayload = {
+            story_id: id,
+            page_number: idx + 1,
+            title: updated[idx].title || `صفحة ${idx + 1}`,
+            content: updated[idx].content || '',
+            audio: cacheBustedUrl,
+          };
+          const { data: newPage, error: insertErr } = await supabase.from('story_pages').insert(pagePayload).select().single();
+          if (insertErr) console.error('Error auto-inserting page on audio upload:', insertErr);
+          if (newPage) {
+            updated[idx] = newPage;
+          }
+          setPages(updated);
+        } else {
+          setPages(updated);
         }
       }
 
