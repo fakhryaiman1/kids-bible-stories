@@ -147,14 +147,9 @@ export const StoryEditorPage: React.FC = () => {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [hasUnsavedChanges]);
 
-  // Auto-Save Effect (30 seconds)
-  const autoSaveTimerRef = useRef<any>(null);
+  // Mark changes state helper
   const markChanged = () => {
     setHasUnsavedChanges(true);
-    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    autoSaveTimerRef.current = setTimeout(() => {
-      saveStory(true);
-    }, 30000);
   };
 
   const saveStory = async (isDraft = false) => {
@@ -175,7 +170,7 @@ export const StoryEditorPage: React.FC = () => {
         reading_time: Number(readingTime),
         difficulty,
         featured,
-        published: isPublishAction ? published : false,
+        published: isPublishAction ? true : false,
         updated_at: new Date().toISOString(),
       };
       // Only include image fields if they have a real value (don't overwrite with empty string)
@@ -192,9 +187,9 @@ export const StoryEditorPage: React.FC = () => {
         if (error) throw error;
       }
 
-      // Save Pages
+      // Save Pages safely by page ID or insert
       if (storyId) {
-        // Delete any excess pages in DB beyond current pages array length
+        // Delete excess pages beyond current count
         const { error: delErr } = await supabase
           .from('story_pages')
           .delete()
@@ -205,7 +200,7 @@ export const StoryEditorPage: React.FC = () => {
         const updatedPagesList: Partial<StoryPage>[] = [];
         for (let i = 0; i < pages.length; i++) {
           const page = pages[i];
-          const pagePayload: Record<string, any> = {
+          const pagePayload = {
             story_id: storyId,
             page_number: i + 1,
             title: page.title || `صفحة ${i + 1}`,
@@ -215,7 +210,6 @@ export const StoryEditorPage: React.FC = () => {
           };
 
           if (page.id) {
-            // Page already exists in DB — update it directly by ID
             const { data: updatedPage, error: updateErr } = await supabase
               .from('story_pages')
               .update(pagePayload)
@@ -230,7 +224,6 @@ export const StoryEditorPage: React.FC = () => {
               updatedPagesList.push(updatedPage || page);
             }
           } else {
-            // New page — insert into DB
             const { data: insertedPage, error: insertErr } = await supabase
               .from('story_pages')
               .insert(pagePayload)
@@ -358,13 +351,16 @@ export const StoryEditorPage: React.FC = () => {
   };
 
   const updateActivePage = (key: keyof StoryPage, value: any) => {
-    if (selectedPageIndex < 0 || selectedPageIndex >= pages.length) return;
-    const updated = [...pages];
-    updated[selectedPageIndex] = {
-      ...updated[selectedPageIndex],
-      [key]: value,
-    };
-    setPages(updated);
+    if (selectedPageIndex < 0) return;
+    setPages((prevPages) => {
+      if (selectedPageIndex >= prevPages.length) return prevPages;
+      const updated = [...prevPages];
+      updated[selectedPageIndex] = {
+        ...updated[selectedPageIndex],
+        [key]: value,
+      };
+      return updated;
+    });
     markChanged();
   };
 
