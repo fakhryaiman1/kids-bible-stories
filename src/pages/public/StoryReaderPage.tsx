@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -13,6 +13,7 @@ import {
   XCircle,
   Star,
   Bookmark,
+  Home,
   RefreshCw,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
@@ -32,6 +33,9 @@ export const StoryReaderPage: React.FC = () => {
 
   // Audio / Speech Reader state
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [audioSourceType, setAudioSourceType] = useState<'file' | 'tts' | null>(null);
+  const [playbackRate, setPlaybackRate] = useState<number>(1.0);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Quiz state
   const [isQuizMode, setIsQuizMode] = useState(false);
@@ -83,43 +87,122 @@ export const StoryReaderPage: React.FC = () => {
     if (slug) fetchStoryDetails();
   }, [slug]);
 
-  // Handle Speech synthesis (Reading story content aloud)
-  const toggleSpeech = () => {
-    if (!('speechSynthesis' in window)) {
-      alert('عذراً، متصفحك لا يدعم خاصية القراءة الصوتية');
-      return;
-    }
-
+  // Toggle Audio Playback
+  const toggleAudio = () => {
+    // Stop any current playback
     if (isSpeaking) {
-      window.speechSynthesis.cancel();
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
       setIsSpeaking(false);
+      setAudioSourceType(null);
       return;
     }
 
     const currentPage = pages[currentPageIdx];
     if (!currentPage) return;
 
-    const utterance = new SpeechSynthesisUtterance(currentPage.content);
-    utterance.lang = 'ar-SA';
-    utterance.rate = 0.9;
-    utterance.onend = () => setIsSpeaking(false);
-    utterance.onerror = () => setIsSpeaking(false);
+    // Stop any running speech synthesis
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
 
-    setIsSpeaking(true);
-    window.speechSynthesis.speak(utterance);
+    // 1. If page has an uploaded audio recording, ALWAYS play the uploaded audio file!
+    if (currentPage.audio && currentPage.audio.trim() !== '') {
+      const audioUrl = currentPage.audio.trim();
+
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+
+      const audio = new Audio(audioUrl);
+      audio.playbackRate = playbackRate;
+      audioRef.current = audio;
+
+      audio.onended = () => {
+        setIsSpeaking(false);
+        setAudioSourceType(null);
+        audioRef.current = null;
+      };
+
+      audio.onerror = (err) => {
+        console.error('Audio file playback error:', err);
+        setIsSpeaking(false);
+        setAudioSourceType(null);
+        audioRef.current = null;
+      };
+
+      setAudioSourceType('file');
+      setIsSpeaking(true);
+
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((err) => {
+          console.error('Audio play error:', err);
+          setIsSpeaking(false);
+          setAudioSourceType(null);
+        });
+      }
+      return; // CRITICAL: NEVER FALL THROUGH TO SPEECH SYNTHESIS WHEN AUDIO FILE EXISTS!
+    }
+
+    // 2. Only use SpeechSynthesis (Text-To-Speech) if NO uploaded audio exists for this page
+    if ('speechSynthesis' in window && currentPage.content) {
+      const utterance = new SpeechSynthesisUtterance(currentPage.content);
+      utterance.lang = 'ar-SA';
+      utterance.rate = playbackRate;
+      utterance.onend = () => {
+        setIsSpeaking(false);
+        setAudioSourceType(null);
+      };
+      utterance.onerror = () => {
+        setIsSpeaking(false);
+        setAudioSourceType(null);
+      };
+
+      setAudioSourceType('tts');
+      setIsSpeaking(true);
+      window.speechSynthesis.speak(utterance);
+    } else {
+      alert('عذراً، لا يوجد ملف صوتي لهذه الصفحة');
+    }
+  };
+
+  // Cycle playback speed: 1.0x -> 1.25x -> 1.5x -> 2.0x -> 1.0x
+  const togglePlaybackRate = () => {
+    const speeds = [1.0, 1.25, 1.5, 2.0];
+    const nextIdx = (speeds.indexOf(playbackRate) + 1) % speeds.length;
+    const newSpeed = speeds[nextIdx];
+    setPlaybackRate(newSpeed);
+
+    // Update active playing audio playbackRate dynamically
+    if (audioRef.current) {
+      audioRef.current.playbackRate = newSpeed;
+    }
   };
 
   useEffect(() => {
+    // Stop audio/speech when switching pages
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
-      setIsSpeaking(false);
     }
+    setIsSpeaking(false);
   }, [currentPageIdx, isQuizMode]);
 
   const handleNextPage = () => {
     if (currentPageIdx < pages.length - 1) {
       setCurrentPageIdx((prev) => prev + 1);
     } else {
+      // Start quiz or complete story
       if (quizzes.length > 0) {
         setIsQuizMode(true);
       } else {
@@ -152,6 +235,7 @@ export const StoryReaderPage: React.FC = () => {
       setSelectedOptionId(null);
       setQuizAnswered(false);
     } else {
+      // Finished all quiz questions
       completeStory(quizScore + (selectedOptionId ? 1 : 0));
     }
   };
@@ -163,6 +247,7 @@ export const StoryReaderPage: React.FC = () => {
 
     if (user && story) {
       try {
+        // Upsert user progress in Supabase
         await supabase.from('user_progress').upsert({
           user_id: user.id,
           story_id: story.id,
@@ -173,6 +258,7 @@ export const StoryReaderPage: React.FC = () => {
           last_read: new Date().toISOString(),
         });
 
+        // Update profile total stars
         if (profile) {
           await supabase
             .from('profiles')
@@ -238,15 +324,31 @@ export const StoryReaderPage: React.FC = () => {
 
         <div className="flex items-center gap-2">
           {!isQuizMode && (
-            <button
-              onClick={toggleSpeech}
-              className={`flex h-9 w-9 items-center justify-center rounded-full transition-all ${
-                isSpeaking ? 'bg-amber-500 text-white animate-pulse' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-              }`}
-              title={isSpeaking ? 'إيقاف القراءة' : 'استمع للقصة'}
-            >
-              {isSpeaking ? <VolumeX size={18} /> : <Volume2 size={18} />}
-            </button>
+            <div className="flex items-center gap-1.5">
+              {isSpeaking && (
+                <span className={`hidden sm:inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold ${
+                  audioSourceType === 'file' ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20' : 'bg-sky-500/10 text-sky-600 border border-sky-500/20'
+                }`}>
+                  {audioSourceType === 'file' ? '🎙️ فويس مخصص' : '🤖 قراءة تلقائية'}
+                </span>
+              )}
+              <button
+                onClick={togglePlaybackRate}
+                className="flex h-9 px-2.5 items-center justify-center rounded-full bg-slate-100 text-xs font-black text-slate-700 hover:bg-slate-200 transition-all"
+                title="تغيير سرعة الصوت"
+              >
+                {playbackRate}x
+              </button>
+              <button
+                onClick={toggleAudio}
+                className={`flex h-9 w-9 items-center justify-center rounded-full transition-all ${
+                  isSpeaking ? 'bg-amber-500 text-white animate-pulse' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+                title={isSpeaking ? 'إيقاف القراءة' : 'استمع للقصة'}
+              >
+                {isSpeaking ? <VolumeX size={18} /> : <Volume2 size={18} />}
+              </button>
+            </div>
           )}
 
           <button
@@ -259,6 +361,25 @@ export const StoryReaderPage: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Hidden Audio Element for Uploaded Voice Files */}
+      {activePage?.audio && (
+        <audio
+          ref={audioRef}
+          key={activePage.audio}
+          src={activePage.audio}
+          preload="auto"
+          onEnded={() => {
+            setIsSpeaking(false);
+            setAudioSourceType(null);
+          }}
+          onError={(e) => {
+            console.error('Audio DOM element error:', e);
+            setIsSpeaking(false);
+            setAudioSourceType(null);
+          }}
+        />
+      )}
 
       {/* Main Reader Stage */}
       {!isQuizMode && !storyCompleted && (
@@ -302,6 +423,27 @@ export const StoryReaderPage: React.FC = () => {
                   <p className="text-lg font-bold leading-relaxed text-slate-800 md:text-xl">
                     {activePage?.content}
                   </p>
+
+                  {/* Dedicated Voice Recording Audio Player */}
+                  {activePage?.audio && (
+                    <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-gradient-to-r from-sky-50 to-indigo-50 p-4 border border-sky-100/80 shadow-sm">
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-sky-500 text-white shadow-sm">
+                          <Volume2 size={18} />
+                        </div>
+                        <div>
+                          <p className="text-xs font-black text-slate-800">السرد الصوتي للقصة 🎙️</p>
+                          <p className="text-[11px] font-medium text-slate-500">التسجيل الصوتي الخاص بالصفحة</p>
+                        </div>
+                      </div>
+                      <audio
+                        key={activePage.audio}
+                        controls
+                        src={activePage.audio}
+                        className="h-9 w-full max-w-[220px] rounded-xl"
+                      />
+                    </div>
+                  )}
                 </div>
 
                 {/* Progress Indicators */}
