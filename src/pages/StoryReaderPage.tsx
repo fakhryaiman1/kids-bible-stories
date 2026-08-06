@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -33,6 +33,8 @@ export const StoryReaderPage: React.FC = () => {
 
   // Audio / Speech Reader state
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState<number>(1.0);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Quiz state
   const [isQuizMode, setIsQuizMode] = useState(false);
@@ -84,15 +86,17 @@ export const StoryReaderPage: React.FC = () => {
     if (slug) fetchStoryDetails();
   }, [slug]);
 
-  // Handle Speech synthesis (Reading story content aloud)
-  const toggleSpeech = () => {
-    if (!('speechSynthesis' in window)) {
-      alert('عذراً، متصفحك لا يدعم خاصية القراءة الصوتية');
-      return;
-    }
-
+  // Toggle Audio Playback (Supports both uploaded audio recordings and text-to-speech)
+  const toggleAudio = () => {
+    // If currently speaking/playing, stop everything
     if (isSpeaking) {
-      window.speechSynthesis.cancel();
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
       setIsSpeaking(false);
       return;
     }
@@ -100,22 +104,75 @@ export const StoryReaderPage: React.FC = () => {
     const currentPage = pages[currentPageIdx];
     if (!currentPage) return;
 
-    const utterance = new SpeechSynthesisUtterance(currentPage.content);
-    utterance.lang = 'ar-SA';
-    utterance.rate = 0.9;
-    utterance.onend = () => setIsSpeaking(false);
-    utterance.onerror = () => setIsSpeaking(false);
+    // 1. If page has an uploaded audio recording, play the file!
+    if (currentPage.audio) {
+      try {
+        if (audioRef.current) {
+          audioRef.current.pause();
+        }
+        const audio = new Audio(currentPage.audio);
+        audio.playbackRate = playbackRate;
+        audioRef.current = audio;
 
-    setIsSpeaking(true);
-    window.speechSynthesis.speak(utterance);
+        audio.onended = () => {
+          setIsSpeaking(false);
+          audioRef.current = null;
+        };
+        audio.onerror = () => {
+          setIsSpeaking(false);
+          audioRef.current = null;
+        };
+
+        setIsSpeaking(true);
+        audio.play().catch((err) => {
+          console.error('Error playing uploaded audio:', err);
+          setIsSpeaking(false);
+        });
+        return;
+      } catch (err) {
+        console.error('Audio play exception:', err);
+      }
+    }
+
+    // 2. Fallback to SpeechSynthesis (Text-To-Speech) if no audio recording uploaded
+    if ('speechSynthesis' in window && currentPage.content) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(currentPage.content);
+      utterance.lang = 'ar-SA';
+      utterance.rate = playbackRate; // Speed: 1.0x, 1.25x, 1.5x, etc.
+      utterance.onend = () => setIsSpeaking(false);
+      utterance.onerror = () => setIsSpeaking(false);
+
+      setIsSpeaking(true);
+      window.speechSynthesis.speak(utterance);
+    } else {
+      alert('عذراً، لا يوجد ملف صوتي أو القراءة غير مدعومة على متصفحك');
+    }
+  };
+
+  // Cycle playback speed: 1.0x -> 1.25x -> 1.5x -> 2.0x -> 1.0x
+  const togglePlaybackRate = () => {
+    const speeds = [1.0, 1.25, 1.5, 2.0];
+    const nextIdx = (speeds.indexOf(playbackRate) + 1) % speeds.length;
+    const newSpeed = speeds[nextIdx];
+    setPlaybackRate(newSpeed);
+
+    // Update active playing audio playbackRate dynamically
+    if (audioRef.current) {
+      audioRef.current.playbackRate = newSpeed;
+    }
   };
 
   useEffect(() => {
-    // Cancel speaking when switching pages
+    // Stop audio/speech when switching pages
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
-      setIsSpeaking(false);
     }
+    setIsSpeaking(false);
   }, [currentPageIdx, isQuizMode]);
 
   const handleNextPage = () => {
@@ -244,15 +301,24 @@ export const StoryReaderPage: React.FC = () => {
 
         <div className="flex items-center gap-2">
           {!isQuizMode && (
-            <button
-              onClick={toggleSpeech}
-              className={`flex h-9 w-9 items-center justify-center rounded-full transition-all ${
-                isSpeaking ? 'bg-amber-500 text-white animate-pulse' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-              }`}
-              title={isSpeaking ? 'إيقاف القراءة' : 'استمع للقصة'}
-            >
-              {isSpeaking ? <VolumeX size={18} /> : <Volume2 size={18} />}
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={togglePlaybackRate}
+                className="flex h-9 px-2.5 items-center justify-center rounded-full bg-slate-100 text-xs font-black text-slate-700 hover:bg-slate-200 transition-all"
+                title="تغيير سرعة الصوت"
+              >
+                {playbackRate}x
+              </button>
+              <button
+                onClick={toggleAudio}
+                className={`flex h-9 w-9 items-center justify-center rounded-full transition-all ${
+                  isSpeaking ? 'bg-amber-500 text-white animate-pulse' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+                title={isSpeaking ? 'إيقاف القراءة' : 'استمع للقصة'}
+              >
+                {isSpeaking ? <VolumeX size={18} /> : <Volume2 size={18} />}
+              </button>
+            </div>
           )}
 
           <button
