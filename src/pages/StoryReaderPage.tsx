@@ -87,9 +87,9 @@ export const StoryReaderPage: React.FC = () => {
     if (slug) fetchStoryDetails();
   }, [slug]);
 
-  // Toggle Audio Playback (Supports both uploaded audio recordings and text-to-speech)
+  // Toggle Audio Playback
   const toggleAudio = () => {
-    // If currently speaking/playing, stop everything
+    // Stop any current playback
     if (isSpeaking) {
       if (audioRef.current) {
         audioRef.current.pause();
@@ -106,27 +106,56 @@ export const StoryReaderPage: React.FC = () => {
     const currentPage = pages[currentPageIdx];
     if (!currentPage) return;
 
-    // 1. If page has an uploaded audio recording, play the DOM audio element!
-    if (currentPage.audio && currentPage.audio.trim()) {
+    // Stop any running speech synthesis
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+
+    // 1. If page has an uploaded audio recording, ALWAYS play the uploaded audio file!
+    if (currentPage.audio && currentPage.audio.trim() !== '') {
+      const audioUrl = currentPage.audio.trim();
+
       if (audioRef.current) {
-        audioRef.current.playbackRate = playbackRate;
-        setAudioSourceType('file');
-        setIsSpeaking(true);
-        audioRef.current.play().catch((err) => {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+
+      const audio = new Audio(audioUrl);
+      audio.playbackRate = playbackRate;
+      audioRef.current = audio;
+
+      audio.onended = () => {
+        setIsSpeaking(false);
+        setAudioSourceType(null);
+        audioRef.current = null;
+      };
+
+      audio.onerror = (err) => {
+        console.error('Audio file playback error:', err);
+        setIsSpeaking(false);
+        setAudioSourceType(null);
+        audioRef.current = null;
+      };
+
+      setAudioSourceType('file');
+      setIsSpeaking(true);
+
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((err) => {
           console.error('Audio play error:', err);
           setIsSpeaking(false);
           setAudioSourceType(null);
         });
-        return;
       }
+      return; // CRITICAL: NEVER FALL THROUGH TO SPEECH SYNTHESIS WHEN AUDIO FILE EXISTS!
     }
 
-    // 2. Fallback to SpeechSynthesis (Text-To-Speech) if no audio recording uploaded
+    // 2. Only use SpeechSynthesis (Text-To-Speech) if NO uploaded audio exists for this page
     if ('speechSynthesis' in window && currentPage.content) {
-      window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(currentPage.content);
       utterance.lang = 'ar-SA';
-      utterance.rate = playbackRate; // Speed: 1.0x, 1.25x, 1.5x, etc.
+      utterance.rate = playbackRate;
       utterance.onend = () => {
         setIsSpeaking(false);
         setAudioSourceType(null);
@@ -140,7 +169,7 @@ export const StoryReaderPage: React.FC = () => {
       setIsSpeaking(true);
       window.speechSynthesis.speak(utterance);
     } else {
-      alert('عذراً، لا يوجد ملف صوتي أو القراءة غير مدعومة على متصفحك');
+      alert('عذراً، لا يوجد ملف صوتي لهذه الصفحة');
     }
   };
 
@@ -394,6 +423,27 @@ export const StoryReaderPage: React.FC = () => {
                   <p className="text-lg font-bold leading-relaxed text-slate-800 md:text-xl">
                     {activePage?.content}
                   </p>
+
+                  {/* Dedicated Voice Recording Audio Player */}
+                  {activePage?.audio && (
+                    <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-gradient-to-r from-sky-50 to-indigo-50 p-4 border border-sky-100/80 shadow-sm">
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-sky-500 text-white shadow-sm">
+                          <Volume2 size={18} />
+                        </div>
+                        <div>
+                          <p className="text-xs font-black text-slate-800">السرد الصوتي للقصة 🎙️</p>
+                          <p className="text-[11px] font-medium text-slate-500">التسجيل الصوتي الخاص بالصفحة</p>
+                        </div>
+                      </div>
+                      <audio
+                        key={activePage.audio}
+                        controls
+                        src={activePage.audio}
+                        className="h-9 w-full max-w-[220px] rounded-xl"
+                      />
+                    </div>
+                  )}
                 </div>
 
                 {/* Progress Indicators */}
