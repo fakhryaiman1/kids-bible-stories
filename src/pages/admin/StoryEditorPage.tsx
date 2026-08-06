@@ -240,7 +240,15 @@ export const StoryEditorPage: React.FC = () => {
         }
         setPages(updatedPagesList);
 
-        // Save Quizzes
+        // Save Quizzes cleanly without duplicates or stale rows
+        const existingQuizIds = quizzes.map((q) => q.id).filter(Boolean) as string[];
+        if (existingQuizIds.length > 0) {
+          await supabase.from('quizzes').delete().eq('story_id', storyId).not('id', 'in', existingQuizIds);
+        } else {
+          await supabase.from('quizzes').delete().eq('story_id', storyId);
+        }
+
+        const updatedQuizzesList: ExtendedQuiz[] = [];
         for (let qIdx = 0; qIdx < quizzes.length; qIdx++) {
           const q = quizzes[qIdx];
           const quizPayload = {
@@ -253,25 +261,50 @@ export const StoryEditorPage: React.FC = () => {
           };
 
           let quizId = q.id;
+          let currentQuiz: ExtendedQuiz = { ...q };
+
           if (quizId) {
-            await supabase.from('quizzes').update(quizPayload).eq('id', quizId);
+            const { data: updatedQ } = await supabase
+              .from('quizzes')
+              .update(quizPayload)
+              .eq('id', quizId)
+              .select()
+              .single();
+            if (updatedQ) currentQuiz = { ...currentQuiz, ...updatedQ };
           } else {
-            const { data: newQ } = await supabase.from('quizzes').insert(quizPayload).select().single();
-            if (newQ) quizId = newQ.id;
+            const { data: newQ } = await supabase
+              .from('quizzes')
+              .insert(quizPayload)
+              .select()
+              .single();
+            if (newQ) {
+              quizId = newQ.id;
+              currentQuiz = { ...currentQuiz, ...newQ };
+            }
           }
 
           // Options
           if (quizId && q.options) {
             await supabase.from('quiz_options').delete().eq('quiz_id', quizId);
+            const savedOptions = [];
             for (const opt of q.options) {
-              await supabase.from('quiz_options').insert({
-                quiz_id: quizId,
-                option_text: opt.option_text || '',
-                is_correct: opt.is_correct || false,
-              });
+              const { data: newOpt } = await supabase
+                .from('quiz_options')
+                .insert({
+                  quiz_id: quizId,
+                  option_text: opt.option_text || '',
+                  is_correct: opt.is_correct || false,
+                })
+                .select()
+                .single();
+              if (newOpt) savedOptions.push(newOpt);
+              else savedOptions.push(opt);
             }
+            currentQuiz.options = savedOptions;
           }
+          updatedQuizzesList.push(currentQuiz);
         }
+        setQuizzes(updatedQuizzesList);
       }
 
       setHasUnsavedChanges(false);
