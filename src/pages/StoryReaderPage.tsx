@@ -33,6 +33,7 @@ export const StoryReaderPage: React.FC = () => {
 
   // Audio / Speech Reader state
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [audioSourceType, setAudioSourceType] = useState<'file' | 'tts' | null>(null);
   const [playbackRate, setPlaybackRate] = useState<number>(1.0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -98,6 +99,7 @@ export const StoryReaderPage: React.FC = () => {
         window.speechSynthesis.cancel();
       }
       setIsSpeaking(false);
+      setAudioSourceType(null);
       return;
     }
 
@@ -105,28 +107,37 @@ export const StoryReaderPage: React.FC = () => {
     if (!currentPage) return;
 
     // 1. If page has an uploaded audio recording, play the file!
-    if (currentPage.audio) {
+    if (currentPage.audio && currentPage.audio.trim()) {
       try {
         if (audioRef.current) {
           audioRef.current.pause();
+          audioRef.current = null;
         }
-        const audio = new Audio(currentPage.audio);
+
+        const audioUrl = currentPage.audio.trim();
+        const audio = new Audio();
+        audio.src = audioUrl;
         audio.playbackRate = playbackRate;
         audioRef.current = audio;
 
         audio.onended = () => {
           setIsSpeaking(false);
+          setAudioSourceType(null);
           audioRef.current = null;
         };
-        audio.onerror = () => {
+        audio.onerror = (e) => {
+          console.error('Error playing uploaded audio file:', e);
           setIsSpeaking(false);
+          setAudioSourceType(null);
           audioRef.current = null;
         };
 
+        setAudioSourceType('file');
         setIsSpeaking(true);
         audio.play().catch((err) => {
-          console.error('Error playing uploaded audio:', err);
+          console.error('Audio play rejection:', err);
           setIsSpeaking(false);
+          setAudioSourceType(null);
         });
         return;
       } catch (err) {
@@ -140,9 +151,16 @@ export const StoryReaderPage: React.FC = () => {
       const utterance = new SpeechSynthesisUtterance(currentPage.content);
       utterance.lang = 'ar-SA';
       utterance.rate = playbackRate; // Speed: 1.0x, 1.25x, 1.5x, etc.
-      utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = () => setIsSpeaking(false);
+      utterance.onend = () => {
+        setIsSpeaking(false);
+        setAudioSourceType(null);
+      };
+      utterance.onerror = () => {
+        setIsSpeaking(false);
+        setAudioSourceType(null);
+      };
 
+      setAudioSourceType('tts');
       setIsSpeaking(true);
       window.speechSynthesis.speak(utterance);
     } else {
@@ -302,6 +320,13 @@ export const StoryReaderPage: React.FC = () => {
         <div className="flex items-center gap-2">
           {!isQuizMode && (
             <div className="flex items-center gap-1.5">
+              {isSpeaking && (
+                <span className={`hidden sm:inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold ${
+                  audioSourceType === 'file' ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20' : 'bg-sky-500/10 text-sky-600 border border-sky-500/20'
+                }`}>
+                  {audioSourceType === 'file' ? '🎙️ فويس مخصص' : '🤖 قراءة تلقائية'}
+                </span>
+              )}
               <button
                 onClick={togglePlaybackRate}
                 className="flex h-9 px-2.5 items-center justify-center rounded-full bg-slate-100 text-xs font-black text-slate-700 hover:bg-slate-200 transition-all"
