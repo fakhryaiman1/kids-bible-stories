@@ -423,27 +423,6 @@ export const StoryReaderPage: React.FC = () => {
                   <p className="text-lg font-bold leading-relaxed text-slate-800 md:text-xl">
                     {activePage?.content}
                   </p>
-
-                  {/* Dedicated Voice Recording Audio Player */}
-                  {activePage?.audio && (
-                    <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-gradient-to-r from-sky-50 to-indigo-50 p-4 border border-sky-100/80 shadow-sm">
-                      <div className="flex items-center gap-2">
-                        <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-sky-500 text-white shadow-sm">
-                          <Volume2 size={18} />
-                        </div>
-                        <div>
-                          <p className="text-xs font-black text-slate-800">السرد الصوتي للقصة 🎙️</p>
-                          <p className="text-[11px] font-medium text-slate-500">التسجيل الصوتي الخاص بالصفحة</p>
-                        </div>
-                      </div>
-                      <audio
-                        key={activePage.audio}
-                        controls
-                        src={activePage.audio}
-                        className="h-9 w-full max-w-[220px] rounded-xl"
-                      />
-                    </div>
-                  )}
                 </div>
 
                 {/* Progress Indicators */}
