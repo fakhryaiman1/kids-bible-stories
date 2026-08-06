@@ -106,42 +106,18 @@ export const StoryReaderPage: React.FC = () => {
     const currentPage = pages[currentPageIdx];
     if (!currentPage) return;
 
-    // 1. If page has an uploaded audio recording, play the file!
+    // 1. If page has an uploaded audio recording, play the DOM audio element!
     if (currentPage.audio && currentPage.audio.trim()) {
-      try {
-        if (audioRef.current) {
-          audioRef.current.pause();
-          audioRef.current = null;
-        }
-
-        const audioUrl = currentPage.audio.trim();
-        const audio = new Audio();
-        audio.src = audioUrl;
-        audio.playbackRate = playbackRate;
-        audioRef.current = audio;
-
-        audio.onended = () => {
-          setIsSpeaking(false);
-          setAudioSourceType(null);
-          audioRef.current = null;
-        };
-        audio.onerror = (e) => {
-          console.error('Error playing uploaded audio file:', e);
-          setIsSpeaking(false);
-          setAudioSourceType(null);
-          audioRef.current = null;
-        };
-
+      if (audioRef.current) {
+        audioRef.current.playbackRate = playbackRate;
         setAudioSourceType('file');
         setIsSpeaking(true);
-        audio.play().catch((err) => {
-          console.error('Audio play rejection:', err);
+        audioRef.current.play().catch((err) => {
+          console.error('Audio play error:', err);
           setIsSpeaking(false);
           setAudioSourceType(null);
         });
         return;
-      } catch (err) {
-        console.error('Audio play exception:', err);
       }
     }
 
@@ -356,6 +332,25 @@ export const StoryReaderPage: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Hidden Audio Element for Uploaded Voice Files */}
+      {activePage?.audio && (
+        <audio
+          ref={audioRef}
+          key={activePage.audio}
+          src={activePage.audio}
+          preload="auto"
+          onEnded={() => {
+            setIsSpeaking(false);
+            setAudioSourceType(null);
+          }}
+          onError={(e) => {
+            console.error('Audio DOM element error:', e);
+            setIsSpeaking(false);
+            setAudioSourceType(null);
+          }}
+        />
+      )}
 
       {/* Main Reader Stage */}
       {!isQuizMode && !storyCompleted && (
